@@ -18,6 +18,7 @@ package org.apache.axis2.osgi.deployment.tracker;
 import org.osgi.framework.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.axis2.engine.AxisConfiguration;
 import org.apache.axis2.engine.MessageReceiver;
 import org.apache.axis2.description.WSDL2Constants;
 import org.apache.axis2.description.AxisService;
@@ -62,17 +63,23 @@ public class WSTracker {
         this.configCtx = configCtx;
         this.serviceListener = new ServiceListener() {
 
+            @Override
             public void serviceChanged(ServiceEvent event) {
                 int serviceType = event.getType();
                 try {
+                    ServiceReference reference = event.getServiceReference();
                     switch (serviceType) {
                         case ServiceEvent.REGISTERED:
-                            ServiceReference reference = event.getServiceReference();
-                            createWS(reference.getBundle(), event.getServiceReference());
-                            break;
+                            Bundle bundle = reference.getBundle();
+                            if (bundle != null) {
+                                createWS(reference.getBundle(), reference);
+                                break;
+                            }
                         case ServiceEvent.UNREGISTERING:
-                            //TODO remove web service
+                            removeWS(reference);
                             break;
+                    default:
+                        break;
                     }
                 } catch (AxisFault e) {
                     String msg = "Error while creating AxisService";
@@ -112,7 +119,7 @@ public class WSTracker {
      * @throws org.apache.axis2.AxisFault will be thrown
      */
     private void createWS(Bundle bundle, ServiceReference[] references) throws AxisFault {
-        if (bundle != null && references != null) {
+        if (references != null) {
             for (ServiceReference reference : references) {
                 createWS(bundle, reference);
             }
@@ -127,28 +134,54 @@ public class WSTracker {
      * @throws AxisFault will be thrown
      */
     private void createWS(Bundle bundle, ServiceReference reference) throws AxisFault {
-        if (bundle != null && reference != null) {
-            Object axis2Ws = reference.getProperty(AXIS2_WS);
-            if (axis2Ws == null) {
-                return;
-            }
-            String wsName = axis2Ws.toString();
-            lock.lock();
-            try {
-                Object service = context.getService(reference);
+        Object axis2Ws = reference.getProperty(AXIS2_WS);
+        if (axis2Ws == null) {
+            return;
+        }
+        String wsName = axis2Ws.toString();
+        lock.lock();
+        try {
+            Object service = context.getService(reference);
+            if (service != null) {
+                AxisConfiguration axisConfiguration = configCtx.getAxisConfiguration();
                 AxisService axisService = AxisService.createService(
                         service.getClass().getName(),
-                        configCtx.getAxisConfiguration(),
+                        axisConfiguration,
                         createDefaultMessageReceivers(),
                         null,
                         null,
                         new BundleClassLoader(bundle, WSTracker.class.getClassLoader()));
                 axisService.setName(wsName);
-                configCtx.getAxisConfiguration().addService(axisService);
+                axisConfiguration.addService(axisService);
                 log.info("Added new WS from ServiceReference : " + service.getClass().getName());
-            } finally {
-                lock.unlock();
             }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Removes the web service from the available ones.
+     *
+     * @param reference reference
+     * @throws AxisFault will be thrown
+     */
+    private void removeWS(ServiceReference reference) throws AxisFault {
+        Object axis2Ws = reference.getProperty(AXIS2_WS);
+        if (axis2Ws == null) {
+            return;
+        }
+        String wsName = axis2Ws.toString();
+        lock.lock();
+        try {
+            AxisConfiguration axisConfiguration = configCtx.getAxisConfiguration();
+            AxisService axisService = axisConfiguration.getService(wsName);
+            if (axisService != null) {
+                axisConfiguration.removeService(wsName);
+                log.info("Removed WS " + axis2Ws + ".");
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
